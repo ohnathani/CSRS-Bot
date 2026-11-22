@@ -1,0 +1,29 @@
+# Local credentials and secrets
+credentials.json
+examplecredentials.json
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Private notes
+NSTP.md
+PE.md
+
+# Logs and generated local data
+*.log
+logs/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Browser and Selenium profiles
+browser-profile/
+browser-profiles/
+chrome-profile/
+chrome-profiles/
+selenium-profile/
+selenium-profiles/

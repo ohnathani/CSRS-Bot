@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>CSRS Selenium Bot</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, sans-serif;
+      background: #f3f5f4;
+      color: #17231c;
+    }
+
+    body {
+      box-sizing: border-box;
+      display: grid;
+      min-height: 100vh;
+      margin: 0;
+      padding: 24px;
+      place-items: center;
+    }
+
+    main {
+      box-sizing: border-box;
+      width: min(100%, 420px);
+      padding: 28px;
+      border: 1px solid #d5ded8;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 8px 24px #17231c12;
+    }
+
+    h1 {
+      margin-top: 0;
+      font-size: 1.5rem;
+    }
+
+    p {
+      line-height: 1.5;
+    }
+
+    label {
+      display: block;
+      margin-top: 18px;
+      font-weight: 600;
+    }
+
+    input {
+      box-sizing: border-box;
+      width: 100%;
+      margin-top: 6px;
+      padding: 11px;
+      border: 1px solid #89978e;
+      border-radius: 6px;
+      font: inherit;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 24px;
+      padding: 12px;
+      border: 0;
+      border-radius: 6px;
+      background: #014421;
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:focus-visible,
+    input:focus-visible {
+      outline: 3px solid #e6b854;
+      outline-offset: 2px;
+    }
+
+    .note {
+      color: #405248;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>CSRS Selenium Bot</h1>
+    <p>Enter your student login details to open the Registration page.</p>
+    <form action="/run" method="post" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{CSRF_TOKEN}}">
+
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" required
+             autocomplete="off" autocapitalize="none" spellcheck="false">
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required
+             autocomplete="new-password">
+
+      <button type="submit">Log in and open Registration</button>
+    </form>
+    <p class="note">Credentials are sent to this computer's local app, then
+      submitted by Selenium to the student portal. They are not saved to a file.</p>
+  </main>
+</body>
+</html>
