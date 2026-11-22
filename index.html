@@ -3,18 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{CSRF_TOKEN}}">
   <meta name="referrer" content="no-referrer">
-  <title>CSRS Selenium Bot</title>
+  <title>PE/NSTP Enlistment App</title>
   <style>
     :root {
       color-scheme: light;
       font-family: system-ui, sans-serif;
       background: #f3f5f4;
       color: #17231c;
+      accent-color: #014421;
+    }
+
+    * {
+      box-sizing: border-box;
     }
 
     body {
-      box-sizing: border-box;
       display: grid;
       min-height: 100vh;
       margin: 0;
@@ -23,7 +28,6 @@
     }
 
     main {
-      box-sizing: border-box;
       width: min(100%, 420px);
       padding: 28px;
       border: 1px solid #d5ded8;
@@ -32,9 +36,18 @@
       box-shadow: 0 8px 24px #17231c12;
     }
 
+    main.app-shell--wide {
+      width: min(100%, 1200px);
+    }
+
     h1 {
       margin-top: 0;
       font-size: 1.5rem;
+    }
+
+    h2,
+    h3 {
+      margin-top: 0;
     }
 
     p {
@@ -47,7 +60,8 @@
       font-weight: 600;
     }
 
-    input {
+    input[type="text"],
+    input[type="password"] {
       box-sizing: border-box;
       width: 100%;
       margin-top: 6px;
@@ -58,7 +72,7 @@
     }
 
     button {
-      width: 100%;
+      min-height: 42px;
       margin-top: 24px;
       padding: 12px;
       border: 0;
@@ -76,31 +90,258 @@
       outline-offset: 2px;
     }
 
-    .note {
+    button.secondary {
+      border: 1px solid #014421;
+      background: #fff;
+      color: #014421;
+    }
+
+    button:disabled {
+      background: #aab8af;
+      cursor: not-allowed;
+    }
+
+    .login-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+
+    #login-heading {
+      margin-bottom: 0;
+    }
+
+    #app-status:empty {
+      display: none;
+    }
+
+    .login-submit {
+      width: 100%;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .actions button {
+      margin-top: 0;
+    }
+
+    .selection-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .selection-heading h2 {
+      margin-bottom: 0;
+    }
+
+    .selection-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-left: auto;
+    }
+
+    .selection-actions button {
+      margin-top: 0;
+    }
+
+    #selection-panel,
+    #review-panel,
+    #results-panel {
+      margin-top: 28px;
+      padding-top: 24px;
+      border-top: 1px solid #d5ded8;
+    }
+
+    .note,
+    .muted {
       color: #405248;
+    }
+
+    .status {
+      min-height: 1.5em;
+      margin: 14px 0 0;
+      color: #30453a;
+    }
+
+    .status.error {
+      color: #a11a1a;
+      font-weight: 650;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin: 16px 0 28px;
+      border: 1px solid #d5ded8;
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      min-width: 860px;
+      border-collapse: collapse;
+      background: #fff;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e1e8e3;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eaf2ed;
+      color: #153c28;
       font-size: 0.9rem;
     }
+
+    tbody tr:hover {
+      background: #f6faf7;
+    }
+
+    .select-cell {
+      width: 78px;
+      text-align: center;
+    }
+
+    .select-cell input {
+      width: 18px;
+      height: 18px;
+      vertical-align: middle;
+    }
+
+    .unavailable {
+      color: #8a2c2c;
+      font-weight: 650;
+    }
+
+    .review-list,
+    .result-list {
+      display: grid;
+      gap: 10px;
+      padding-left: 22px;
+    }
+
+    .result-list li {
+      padding: 12px;
+      border-left: 4px solid #87978c;
+      background: #f7f9f7;
+    }
+
+    .result-list li[data-status="success"] {
+      border-color: #148447;
+    }
+
+    .result-list li[data-status="failed"],
+    .result-list li[data-status="session_lost"] {
+      border-color: #b52e2e;
+    }
+
+    .result-list li[data-status="unconfirmed"],
+    .result-list li[data-status="not_attempted"] {
+      border-color: #bc831c;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    @media (max-width: 600px) {
+      body {
+        padding: 14px;
+      }
+
+      main {
+        padding: 20px;
+      }
+    }
   </style>
+  <script src="/app.js" defer></script>
 </head>
 <body>
   <main>
     <h1>CSRS Selenium Bot</h1>
-    <p>Enter your student login details to open the Registration page.</p>
-    <form action="/run" method="post" autocomplete="off">
-      <input type="hidden" name="csrf_token" value="{{CSRF_TOKEN}}">
+    <p>Log in to load current PE and NSTP registration subjects. Select and
+      review your choices before confirming enlistment.</p>
+    <p id="app-status" class="status" role="status" aria-live="polite"></p>
 
-      <label for="username">Username</label>
-      <input id="username" name="username" type="text" required
-             autocomplete="off" autocapitalize="none" spellcheck="false">
+    <section id="login-panel" aria-labelledby="login-heading">
+      <h2 id="login-heading">Log in to open Registration</h2>
+      <form id="login-form" autocomplete="off">
+        <div class="login-grid">
+          <div>
+            <label for="username">Username</label>
+            <input id="username" name="username" type="text" required
+                   autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+          <div>
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" required
+                   autocomplete="new-password">
+          </div>
+        </div>
+        <button id="login-button" class="login-submit" type="submit">
+          Log in and load Registration
+        </button>
+      </form>
+      <p class="note">Credentials are sent to this computer's local app, then
+        submitted by Selenium to the student portal. They are not saved to a file
+        or browser storage.</p>
+    </section>
 
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" required
-             autocomplete="new-password">
+    <section id="selection-panel" hidden aria-labelledby="subjects-heading">
+      <div class="selection-heading">
+        <h2 id="subjects-heading">Available subjects</h2>
+        <div class="selection-actions">
+          <button id="save-selection" type="button" disabled>Save selection</button>
+          <button id="logout-button" class="secondary" type="button">Log out</button>
+        </div>
+      </div>
+      <p class="muted">Rows and enlist controls come from the live Registration
+        page. Rows without an allowed Add control cannot be selected.</p>
+      <section aria-labelledby="pe-heading">
+        <h3 id="pe-heading">Physical Education (PE)</h3>
+        <div id="pe-tables"></div>
+      </section>
+      <section aria-labelledby="nstp-heading">
+        <h3 id="nstp-heading">National Service Training Program (NSTP)</h3>
+        <div id="nstp-tables"></div>
+      </section>
+      <p id="selection-status" class="status" aria-live="polite"></p>
+    </section>
 
-      <button type="submit">Log in and open Registration</button>
-    </form>
-    <p class="note">Credentials are sent to this computer's local app, then
-      submitted by Selenium to the student portal. They are not saved to a file.</p>
+    <section id="review-panel" hidden aria-labelledby="review-heading">
+      <h2 id="review-heading">Review selected subjects</h2>
+      <p>Confirm only if this list is correct. Confirming submits enlistment
+        requests to the student portal.</p>
+      <ol id="review-list" class="review-list"></ol>
+      <div class="actions">
+        <button id="edit-selection" class="secondary" type="button">
+          Change selection
+        </button>
+        <button id="confirm-enlist" type="button">Confirm and enlist</button>
+      </div>
+    </section>
+
+    <section id="results-panel" hidden aria-labelledby="results-heading">
+      <h2 id="results-heading">Enlistment results</h2>
+      <ol id="result-list" class="result-list"></ol>
+      <div class="actions">
+        <button id="close-session" class="secondary" type="button">
+          Close Selenium session
+        </button>
+      </div>
+    </section>
   </main>
 </body>
 </html>
