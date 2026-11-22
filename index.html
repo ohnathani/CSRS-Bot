@@ -367,8 +367,14 @@
 
     <section id="results-panel" hidden aria-labelledby="results-heading">
       <h2 id="results-heading">Enlistment results</h2>
+      <p class="muted">Failed and unconfirmed results can be retried. Retrying an
+        unconfirmed result may duplicate an enlistment if the portal already
+        accepted it.</p>
       <ol id="result-list" class="result-list"></ol>
       <div class="actions">
+        <button id="retry-enlistments" type="button" hidden>
+          Retry failed or unconfirmed enlistments
+        </button>
         <button id="close-session" class="secondary" type="button">
           Close Selenium session
         </button>

@@ -13,6 +13,7 @@
 - BROKEN: Offers an optional, persistent auto-enlist toggle (off by default). It submits checked saved subjects as soon as Registration renders; in an active session, enabling it submits the checked subjects, and newly checked subjects are submitted immediately. Auto-enlist skips review and confirmation and never selects unchecked subjects.
 - Uses Selenium to activate the matching live CSRS Add control for each subject.
 - Reports each enlistment result and stops when the portal response is unconfirmed.
+- Offers a retry button for failed and unconfirmed enlistments; retrying an unconfirmed outcome may duplicate an enlistment if the portal already accepted it.
 - Opens the local interface in Chrome's Default profile and resizes only that window.
 
 ## Run

@@ -3,6 +3,7 @@
 const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 const selectionStorageKey = "csrs-enlistment-selection-v1";
 const autoEnlistStorageKey = "csrs-auto-enlist-v1";
+const retryableResultStatuses = new Set(["failed", "unconfirmed"]);
 const appShell = document.querySelector("main");
 const statusElement = document.getElementById("app-status");
 const loginPanel = document.getElementById("login-panel");
@@ -18,9 +19,11 @@ const saveButton = document.getElementById("save-selection");
 const selectionStatus = document.getElementById("selection-status");
 const reviewList = document.getElementById("review-list");
 const resultList = document.getElementById("result-list");
+const retryEnlistmentsButton = document.getElementById("retry-enlistments");
 
 let tables = [];
 let subjectsByKey = new Map();
+let latestEnlistmentResults = [];
 let selectedKeys = new Set();
 let savedKeys = new Set();
 let autoEnlistEnabled = false;
@@ -304,6 +307,10 @@ function renderReview() {
 }
 
 function renderResults(results, keepSelection = false) {
+  latestEnlistmentResults = results;
+  retryEnlistmentsButton.hidden = !results.some(
+    (result) => retryableResultStatuses.has(result.status),
+  );
   const labels = {
     success: "Successfully enlisted",
     already_enlisted: "Already enlisted",
@@ -334,19 +341,53 @@ function renderResults(results, keepSelection = false) {
   });
 }
 
-async function submitSavedSelections(automatic, keys = [...savedKeys]) {
+async function submitSavedSelections(
+  automatic,
+  keys = [...savedKeys],
+  retryFailed = false,
+) {
   const response = await postJson("/api/enlist", {
     keys,
     [automatic ? "auto_enlist" : "confirmed"]: true,
   });
-  renderResults(response.results, automatic);
+  if (retryFailed) {
+    const resultsByKey = new Map(
+      latestEnlistmentResults.map((result) => [result.key, result]),
+    );
+    response.results.forEach((result) => resultsByKey.set(result.key, result));
+    renderResults([...resultsByKey.values()], automatic);
+  } else {
+    renderResults(response.results, automatic);
+  }
   setStatus(
     statusElement,
-    automatic
-      ? "Auto-enlist results are shown below."
-      : "The portal response for each selected subject is shown below.",
+    retryFailed
+      ? "Retry results are shown below."
+      : automatic
+        ? "Auto-enlist results are shown below."
+        : "The portal response for each selected subject is shown below.",
   );
   return response.results;
+}
+
+async function retryEnlistments(event) {
+  const keys = latestEnlistmentResults
+    .filter((result) => retryableResultStatuses.has(result.status))
+    .map((result) => result.key);
+  if (keys.length === 0) {
+    return;
+  }
+
+  const button = event.currentTarget;
+  button.disabled = true;
+  setStatus(statusElement, `Retrying ${keys.length} unsuccessful enlistment(s)...`);
+  try {
+    await submitSavedSelections(autoEnlistEnabled, keys, true);
+  } catch (error) {
+    setStatus(statusElement, error.message, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function autoEnlistIfReady() {
@@ -521,6 +562,8 @@ document.getElementById("confirm-enlist").addEventListener("click", async (event
     button.disabled = false;
   }
 });
+
+retryEnlistmentsButton.addEventListener("click", retryEnlistments);
 
 document.getElementById("logout-button").addEventListener("click", async () => {
   try {

@@ -163,6 +163,8 @@ class LocalAppApiTests(unittest.TestCase):
         self.assertIn('id="login-panel"', page)
         self.assertIn('id="selenium-instance-count"', page)
         self.assertIn('id="auto-enlist"', page)
+        self.assertIn('id="retry-enlistments"', page)
+        self.assertIn("Retrying an", page)
         self.assertIn('type="text" inputmode="numeric"', page)
         self.assertIn("function persistSelectedKeys()", script)
         self.assertNotIn('fetch("/api/subjects"', script)
