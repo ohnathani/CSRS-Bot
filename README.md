@@ -10,7 +10,7 @@
 - Tiles all requested Selenium windows on the left, then waits until their login forms are ready before entering credentials.
 - Re-enters credentials only after a submitted login form disappears and a new ready form appears.
 - In manual mode, lets users review and confirm selected subjects before enlistment.
-- Offers an optional, persistent auto-enlist toggle (off by default). It submits checked saved subjects as soon as Registration renders; in an active session, enabling it submits the checked subjects, and newly checked subjects are submitted immediately. Auto-enlist skips review and confirmation and never selects unchecked subjects.
+- BROKEN: Offers an optional, persistent auto-enlist toggle (off by default). It submits checked saved subjects as soon as Registration renders; in an active session, enabling it submits the checked subjects, and newly checked subjects are submitted immediately. Auto-enlist skips review and confirmation and never selects unchecked subjects.
 - Uses Selenium to activate the matching live CSRS Add control for each subject.
 - Reports each enlistment result and stops when the portal response is unconfirmed.
 - Opens the local interface in Chrome's Default profile and resizes only that window.
