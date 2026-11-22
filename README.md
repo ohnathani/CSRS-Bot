@@ -1,47 +1,30 @@
-# Automated PE and NSTP Enlistment
+# Features
 
-Install the Python dependency:
+- Loads current PE and NSTP subject tables from the authenticated Registration page.
+- Shows PE options and only available NSTP options.
+- Saves subject choices in the browser so they persist between app sessions.
+- Opens on the login page and keeps passwords out of browser storage and files.
+- Keeps the first Selenium window to load Registration and closes the other attempts; if all fail, their windows remain open.
+- Retries transient login and Registration page loading every 5 seconds; stops if the portal explicitly rejects the credentials.
+- Lets you enter 1–50 parallel Selenium instances using the same login credentials.
+- Tiles all requested Selenium windows on the left, then waits until their login forms are ready before entering credentials.
+- Re-enters credentials only after a submitted login form disappears and a new ready form appears.
+- In manual mode, lets users review and confirm selected subjects before enlistment.
+- Offers an optional, persistent auto-enlist toggle (off by default). It submits checked saved subjects as soon as Registration renders; in an active session, enabling it submits the checked subjects, and newly checked subjects are submitted immediately. Auto-enlist skips review and confirmation and never selects unchecked subjects.
+- Uses Selenium to activate the matching live CSRS Add control for each subject.
+- Reports each enlistment result and stops when the portal response is unconfirmed.
+- Opens the local interface in Chrome's Default profile and resizes only that window.
+
+## Run
+
+Install dependencies:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-Start the local interface:
+Start the app:
 
 ```powershell
 python local_app.py
-```
-
-The app opens on `http://127.0.0.1:8765` in Chrome's `Default` profile and
-resizes only its own window to the right half of the screen. After login,
-Selenium opens the student portal in its own ChromeDriver window using a
-temporary profile and an ephemeral remote-debugging port; the app does not
-resize or reposition that window. The local server listens only on this
-computer. Select subjects and review the list; checkbox changes are saved in
-the browser so they can be restored after you log in again. The app always
-starts on the login page. Choose **Confirm and enlist** to submit the reviewed
-selection.
-
-Passwords are used in memory only and are not written to files or browser
-storage. Subject selections are stored in browser local storage. Do not expose
-the local app to your network. The app does not use `credentials.json`;
-remove any old copy yourself if it contains a password.
-
-The `PE.md` and `NSTP.md` files are unchanged reference snapshots. The app uses
-the current authenticated Registration page at runtime. If the portal does not
-provide an explicit result confirmation, the app reports the attempt as
-unconfirmed and stops the remaining requests.
-
-To open the Registration page from the terminal without enlisting, run:
-
-```powershell
-python csrs_selenium.py
-```
-
-The terminal prompts for the username and a masked password.
-
-Run local parser tests with:
-
-```powershell
-python -m unittest discover -s tests -v
 ```

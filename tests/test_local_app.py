@@ -1,13 +1,18 @@
 import json
 from http.server import HTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import Barrier, Event, Lock, Thread
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import local_app
+from csrs_selenium import (
+    LoginError,
+    PortalAttemptCancelled,
+    RegistrationPageError,
+)
 
 
 class FakePortalSession:
@@ -108,7 +113,28 @@ class LocalAppApiTests(unittest.TestCase):
         )
         position_window.assert_called_once_with()
 
-    def test_main_closes_the_server_and_active_portal_on_exit(self) -> None:
+    def test_selenium_instances_are_tiled_on_the_left_half(self) -> None:
+        with patch.object(
+            local_app,
+            "_local_app_window_rect",
+            return_value=(960, 0, 960, 1080),
+        ):
+            rects = [
+                local_app._selenium_window_rect(index, 4)
+                for index in range(4)
+            ]
+
+        self.assertEqual(
+            rects,
+            [
+                (0, 0, 480, 540),
+                (480, 0, 480, 540),
+                (0, 540, 480, 540),
+                (480, 540, 480, 540),
+            ],
+        )
+
+    def test_main_leaves_selenium_open_and_closes_the_server_on_exit(self) -> None:
         fake_server = Mock()
         fake_server.serve_forever.side_effect = KeyboardInterrupt
         local_app._active_session = self.session
@@ -120,7 +146,8 @@ class LocalAppApiTests(unittest.TestCase):
         ):
             local_app.main()
 
-        self.assertTrue(self.session.closed)
+        self.assertFalse(self.session.closed)
+        self.session.driver.quit.assert_not_called()
         fake_server.server_close.assert_called_once()
 
     def test_home_page_injects_csrf_token_and_serves_client_script(self) -> None:
@@ -134,6 +161,9 @@ class LocalAppApiTests(unittest.TestCase):
         self.assertIn('name="csrf-token" content="test-csrf-token"', page)
         self.assertNotIn("{{CSRF_TOKEN}}", page)
         self.assertIn('id="login-panel"', page)
+        self.assertIn('id="selenium-instance-count"', page)
+        self.assertIn('id="auto-enlist"', page)
+        self.assertIn('type="text" inputmode="numeric"', page)
         self.assertIn("function persistSelectedKeys()", script)
         self.assertNotIn('fetch("/api/subjects"', script)
 
@@ -141,20 +171,25 @@ class LocalAppApiTests(unittest.TestCase):
         args = ("student-id", "subject-id", "PE II")
         with patch.object(
             local_app,
-            "start_portal_session",
+            "_start_first_successful_session",
             return_value=self.session,
-        ) as start, patch.object(
+        ) as start_session, patch.object(
             local_app,
             "_position_local_app_window",
         ) as position_window:
             status, response = self.request_json(
                 "/api/login",
-                {"username": "student", "password": "dummy-password"},
+                {
+                    "username": "student",
+                    "password": "dummy-password",
+                    "instance_count": 3,
+                },
             )
 
-        start.assert_called_once_with(
+        start_session.assert_called_once_with(
             "student",
             "dummy-password",
+            3,
         )
         position_window.assert_not_called()
         self.assertEqual(status, 200)
@@ -163,6 +198,227 @@ class LocalAppApiTests(unittest.TestCase):
         self.assertNotIn("enlist_args", response_text)
         self.assertNotIn(args[0], response_text)
         self.assertEqual(local_app._active_session, self.session)
+
+    def test_failed_login_keeps_browser_open_until_retry(self) -> None:
+        failed_driver = Mock()
+        failed_login = LoginError("Login failed.", failed_driver)
+        with patch.object(
+            local_app,
+            "_start_first_successful_session",
+            side_effect=failed_login,
+        ):
+            status, response = self.request_json(
+                "/api/login",
+                {"username": "student", "password": "dummy-password"},
+            )
+
+        self.assertEqual(status, 401)
+        self.assertEqual(response["error"], "Login failed.")
+        failed_driver.quit.assert_not_called()
+
+        with patch.object(
+            local_app,
+            "_start_first_successful_session",
+            return_value=self.session,
+        ):
+            status, _ = self.request_json(
+                "/api/login",
+                {"username": "student", "password": "correct-password"},
+            )
+
+        self.assertEqual(status, 200)
+        failed_driver.quit.assert_not_called()
+
+    def test_registration_page_failure_keeps_browser_open(self) -> None:
+        failed_driver = Mock()
+        failure = RegistrationPageError(
+            "The Registration page did not load its subject tables.",
+            failed_driver,
+        )
+        with patch.object(
+            local_app,
+            "_start_first_successful_session",
+            side_effect=failure,
+        ):
+            status, response = self.request_json(
+                "/api/login",
+                {"username": "student", "password": "dummy-password"},
+            )
+
+        self.assertEqual(status, 502)
+        self.assertEqual(
+            response["error"],
+            "The Registration page did not load its subject tables.",
+        )
+        failed_driver.quit.assert_not_called()
+
+    def test_first_successful_instance_is_kept_and_losers_are_closed(self) -> None:
+        sessions = [FakePortalSession(), FakePortalSession()]
+        first_registration_ready = Event()
+        second_session_returning = Event()
+        launch_barriers = [None, None]
+        window_rects = [None, None]
+        next_index = 0
+        index_lock = Lock()
+
+        def start_instance(
+            _username,
+            _password,
+            _cancel_event,
+            on_registration_ready,
+            launch_barrier,
+            credentials_barrier,
+            window_rect,
+            window_grid_position,
+        ):
+            nonlocal next_index
+            with index_lock:
+                index = next_index
+                next_index += 1
+            launch_barriers[index] = (
+                launch_barrier,
+                credentials_barrier,
+            )
+            window_rects[index] = window_rect
+            self.assertEqual(window_grid_position, (index, 0))
+            if index == 0:
+                on_registration_ready()
+                first_registration_ready.set()
+                self.assertTrue(second_session_returning.wait(timeout=3))
+                return sessions[index]
+            self.assertTrue(first_registration_ready.wait(timeout=3))
+            on_registration_ready()
+            second_session_returning.set()
+            return sessions[index]
+
+        with patch.object(
+            local_app,
+            "start_portal_session",
+            side_effect=start_instance,
+        ) as start:
+            winner = local_app._start_first_successful_session(
+                "student",
+                "password",
+                2,
+            )
+
+        self.assertIs(winner, sessions[0])
+        self.assertEqual(start.call_count, 2)
+        self.assertIs(launch_barriers[0][0], launch_barriers[1][0])
+        self.assertIs(launch_barriers[0][1], launch_barriers[1][1])
+        self.assertEqual(launch_barriers[0][0].parties, 2)
+        self.assertEqual(launch_barriers[0][1].parties, 2)
+        self.assertNotEqual(window_rects[0], window_rects[1])
+        winner.driver.quit.assert_not_called()
+        sessions[1].driver.quit.assert_called_once()
+
+    def test_losing_in_progress_instance_is_cancelled_and_closed(self) -> None:
+        start_barrier = Barrier(2)
+        winner = FakePortalSession()
+        losing_driver = Mock()
+        next_index = 0
+        index_lock = Lock()
+
+        def start_instance(
+            _username,
+            _password,
+            cancel_event,
+            on_registration_ready,
+            _launch_barrier,
+            _credentials_barrier,
+            _window_rect,
+            _window_grid_position,
+        ):
+            nonlocal next_index
+            with index_lock:
+                index = next_index
+                next_index += 1
+            start_barrier.wait(timeout=3)
+            if index == 0:
+                on_registration_ready()
+                return winner
+            if cancel_event.wait(timeout=3):
+                raise PortalAttemptCancelled(losing_driver)
+            raise AssertionError("The losing attempt was not cancelled.")
+
+        with patch.object(
+            local_app,
+            "start_portal_session",
+            side_effect=start_instance,
+        ):
+            result = local_app._start_first_successful_session(
+                "student",
+                "password",
+                2,
+            )
+
+        self.assertIs(result, winner)
+        winner.driver.quit.assert_not_called()
+        losing_driver.quit.assert_called_once()
+
+    def test_all_failed_instances_remain_open(self) -> None:
+        drivers = [Mock(), Mock()]
+        next_index = 0
+        index_lock = Lock()
+
+        def reject_login(
+            _username,
+            _password,
+            _cancel_event,
+            _on_registration_ready,
+            _launch_barrier,
+            _credentials_barrier,
+            _window_rect,
+            _window_grid_position,
+        ):
+            nonlocal next_index
+            with index_lock:
+                driver = drivers[next_index]
+                next_index += 1
+            raise LoginError("The portal rejected the login credentials.", driver)
+
+        with (
+            patch.object(
+                local_app,
+                "start_portal_session",
+                side_effect=reject_login,
+            ),
+            self.assertRaises(LoginError),
+        ):
+            local_app._start_first_successful_session(
+                "student",
+                "password",
+                2,
+            )
+
+        for driver in drivers:
+            driver.quit.assert_not_called()
+
+    def test_invalid_instance_counts_are_rejected(self) -> None:
+        with patch.object(local_app, "_start_first_successful_session") as start:
+            status, response = self.request_json(
+                "/api/login",
+                {
+                    "username": "student",
+                    "password": "dummy-password",
+                    "instance_count": 51,
+                },
+            )
+
+        self.assertEqual(status, 400)
+        self.assertIn("1 and 50", response["error"])
+        start.assert_not_called()
+
+    def test_logout_leaves_selenium_browser_open(self) -> None:
+        local_app._active_session = self.session
+
+        status, response = self.request_json("/api/logout", {})
+
+        self.assertEqual(status, 200)
+        self.assertTrue(response["ok"])
+        self.assertIsNone(local_app._active_session)
+        self.assertFalse(self.session.closed)
+        self.session.driver.quit.assert_not_called()
 
     def test_enlist_requires_confirmation_and_forwards_only_opaque_keys(self) -> None:
         local_app._active_session = self.session
@@ -181,6 +437,22 @@ class LocalAppApiTests(unittest.TestCase):
             status, response = self.request_json(
                 "/api/enlist",
                 {"keys": ["opaque-row-key"], "confirmed": True},
+            )
+
+        run.assert_called_once_with(self.session, ["opaque-row-key"])
+        self.assertEqual(status, 200)
+        self.assertEqual(response["results"][0]["status"], "success")
+
+    def test_auto_enlist_request_forwards_only_saved_subject_keys(self) -> None:
+        local_app._active_session = self.session
+        with patch.object(
+            local_app,
+            "run_selected_enlistments",
+            return_value=[{"key": "opaque-row-key", "status": "success"}],
+        ) as run:
+            status, response = self.request_json(
+                "/api/enlist",
+                {"keys": ["opaque-row-key"], "auto_enlist": True},
             )
 
         run.assert_called_once_with(self.session, ["opaque-row-key"])

@@ -2,6 +2,7 @@
 
 const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 const selectionStorageKey = "csrs-enlistment-selection-v1";
+const autoEnlistStorageKey = "csrs-auto-enlist-v1";
 const appShell = document.querySelector("main");
 const statusElement = document.getElementById("app-status");
 const loginPanel = document.getElementById("login-panel");
@@ -10,7 +11,9 @@ const reviewPanel = document.getElementById("review-panel");
 const resultsPanel = document.getElementById("results-panel");
 const loginForm = document.getElementById("login-form");
 const passwordInput = document.getElementById("password");
+const instanceCountInput = document.getElementById("selenium-instance-count");
 const loginButton = document.getElementById("login-button");
+const autoEnlistToggle = document.getElementById("auto-enlist");
 const saveButton = document.getElementById("save-selection");
 const selectionStatus = document.getElementById("selection-status");
 const reviewList = document.getElementById("review-list");
@@ -20,10 +23,33 @@ let tables = [];
 let subjectsByKey = new Map();
 let selectedKeys = new Set();
 let savedKeys = new Set();
+let autoEnlistEnabled = false;
+let autoEnlistInFlight = false;
+let autoAttemptedKeys = new Set();
 
 function setStatus(element, message, isError = false) {
   element.textContent = message;
   element.classList.toggle("error", isError);
+}
+
+function readAutoEnlistPreference() {
+  try {
+    const stored = localStorage.getItem(autoEnlistStorageKey);
+    if (stored === null || stored === "false") {
+      return false;
+    }
+    if (stored === "true") {
+      return true;
+    }
+    throw new Error("Saved auto-enlist setting has an invalid format.");
+  } catch (error) {
+    setStatus(
+      statusElement,
+      `Could not read auto-enlist setting: ${error.message}`,
+      true,
+    );
+    return false;
+  }
 }
 
 async function postJson(path, payload) {
@@ -87,6 +113,14 @@ function subjectLabel(subject) {
   return `${subject.category}: ${details}`;
 }
 
+function getCheckedSubjectKeys() {
+  return new Set(
+    [...document.querySelectorAll(
+      '#pe-tables input[type="checkbox"]:checked, #nstp-tables input[type="checkbox"]:checked',
+    )].map((checkbox) => checkbox.value),
+  );
+}
+
 function setPanels({ login, selection, review, results }) {
   loginPanel.hidden = !login;
   selectionPanel.hidden = !selection;
@@ -127,6 +161,7 @@ function buildTable(table, category) {
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
+    checkbox.value = subject.key;
     checkbox.checked = selectedKeys.has(subject.key);
     checkbox.disabled = !subject.selectable;
     checkbox.setAttribute("aria-label", `Select ${subjectLabel({
@@ -142,9 +177,17 @@ function buildTable(table, category) {
       } else {
         selectedKeys.delete(subject.key);
       }
+      savedKeys = getCheckedSubjectKeys();
       saveButton.disabled = selectedKeys.size === 0;
       reviewPanel.hidden = true;
-      if (persistSelectedKeys()) {
+      if (!persistSelectedKeys()) {
+        return;
+      }
+      if (autoEnlistEnabled && checkbox.checked) {
+        autoEnlistIfReady().catch((error) => {
+          setStatus(statusElement, error.message, true);
+        });
+      } else {
         setStatus(selectionStatus, "Selection changes saved.");
       }
     });
@@ -176,7 +219,7 @@ function buildTable(table, category) {
   return wrapper;
 }
 
-function renderTables(responseTables) {
+async function renderTables(responseTables) {
   tables = responseTables;
   subjectsByKey = new Map();
   const availableKeys = new Set();
@@ -235,10 +278,15 @@ function renderTables(responseTables) {
     }
   }
 
+  selectedKeys = getCheckedSubjectKeys();
+  savedKeys = new Set(selectedKeys);
   persistSelectedKeys();
 
   saveButton.disabled = selectedKeys.size === 0;
   setPanels({ login: false, selection: true, review: false, results: false });
+  if (autoEnlistEnabled && savedKeys.size > 0) {
+    await autoEnlistIfReady();
+  }
 }
 
 function renderReview() {
@@ -255,7 +303,7 @@ function renderReview() {
   setPanels({ login: false, selection: false, review: true, results: false });
 }
 
-function renderResults(results) {
+function renderResults(results, keepSelection = false) {
   const labels = {
     success: "Successfully enlisted",
     already_enlisted: "Already enlisted",
@@ -278,8 +326,110 @@ function renderResults(results) {
     item.append(title, message);
     resultList.append(item);
   });
-  setPanels({ login: false, selection: false, review: false, results: true });
+  setPanels({
+    login: false,
+    selection: keepSelection,
+    review: false,
+    results: true,
+  });
 }
+
+async function submitSavedSelections(automatic, keys = [...savedKeys]) {
+  const response = await postJson("/api/enlist", {
+    keys,
+    [automatic ? "auto_enlist" : "confirmed"]: true,
+  });
+  renderResults(response.results, automatic);
+  setStatus(
+    statusElement,
+    automatic
+      ? "Auto-enlist results are shown below."
+      : "The portal response for each selected subject is shown below.",
+  );
+  return response.results;
+}
+
+async function autoEnlistIfReady() {
+  if (!autoEnlistEnabled || autoEnlistInFlight || savedKeys.size === 0) {
+    return;
+  }
+  const keysToSubmit = [...savedKeys].filter(
+    (key) => !autoAttemptedKeys.has(key),
+  );
+  if (keysToSubmit.length === 0) {
+    return;
+  }
+  autoEnlistInFlight = true;
+  setStatus(
+    statusElement,
+    `Auto-enlisting ${keysToSubmit.length} checked subject(s)...`,
+  );
+  let succeeded = false;
+  try {
+    const results = await submitSavedSelections(true, keysToSubmit);
+    keysToSubmit.forEach((key) => autoAttemptedKeys.add(key));
+    succeeded = !results.some((result) =>
+      ["unconfirmed", "session_lost"].includes(result.status),
+    );
+  } finally {
+    autoEnlistInFlight = false;
+    if (
+      succeeded &&
+      autoEnlistEnabled &&
+      [...savedKeys].some((key) => !autoAttemptedKeys.has(key))
+    ) {
+      autoEnlistIfReady().catch((error) => {
+        setStatus(statusElement, error.message, true);
+      });
+    }
+  }
+}
+
+autoEnlistEnabled = readAutoEnlistPreference();
+autoEnlistToggle.checked = autoEnlistEnabled;
+autoEnlistToggle.addEventListener("change", async () => {
+  const previousValue = autoEnlistEnabled;
+  try {
+    localStorage.setItem(autoEnlistStorageKey, String(autoEnlistToggle.checked));
+    autoEnlistEnabled = autoEnlistToggle.checked;
+  } catch (error) {
+    autoEnlistToggle.checked = previousValue;
+    setStatus(
+      statusElement,
+      `Could not save auto-enlist setting: ${error.message}`,
+      true,
+    );
+    return;
+  }
+
+  if (
+    autoEnlistEnabled &&
+    tables.length > 0 &&
+    (!selectionPanel.hidden || !reviewPanel.hidden)
+  ) {
+    if (selectedKeys.size === 0) {
+      setStatus(
+        statusElement,
+        "No subjects are selected. Select all desired subjects, then turn auto-enlist off and on to submit them together.",
+      );
+      return;
+    }
+    selectedKeys = getCheckedSubjectKeys();
+    savedKeys = new Set(selectedKeys);
+    try {
+      await autoEnlistIfReady();
+    } catch (error) {
+      setStatus(statusElement, error.message, true);
+    }
+  } else {
+    setStatus(
+      statusElement,
+      autoEnlistEnabled
+        ? "Auto-enlist is on for the next login."
+        : "Auto-enlist is off.",
+    );
+  }
+});
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -287,25 +437,48 @@ loginForm.addEventListener("submit", async (event) => {
     return;
   }
 
+  const instanceCount = Number(instanceCountInput.value);
+  const autoEnlistAfterLogin = autoEnlistEnabled;
+  autoEnlistInFlight = false;
+  autoAttemptedKeys = new Set();
   loginButton.disabled = true;
-  setStatus(statusElement, "Logging in and loading live PE/NSTP tables...");
+  autoEnlistToggle.disabled = true;
+  setStatus(
+    statusElement,
+    `Opening ${instanceCount} Selenium windows together; keeping the first to load Registration...`,
+  );
   try {
     const response = await postJson("/api/login", {
       username: document.getElementById("username").value,
       password: passwordInput.value,
+      instance_count: instanceCount,
     });
     passwordInput.value = "";
-    renderTables(response.tables);
-    setStatus(statusElement, "Live Registration subjects loaded.");
+    await renderTables(response.tables);
+    if (autoEnlistAfterLogin && savedKeys.size === 0) {
+      setStatus(
+        statusElement,
+        "Registration loaded, but no saved subjects are selected. Select all desired subjects, then turn auto-enlist off and on to submit them together.",
+      );
+    } else {
+      setStatus(
+        statusElement,
+        instanceCount > 1
+          ? "Live Registration loaded. Other Selenium instances were closed."
+          : "Live Registration subjects loaded.",
+      );
+    }
   } catch (error) {
     passwordInput.value = "";
     setStatus(statusElement, error.message, true);
   } finally {
     loginButton.disabled = false;
+    autoEnlistToggle.disabled = false;
   }
 });
 
-saveButton.addEventListener("click", () => {
+saveButton.addEventListener("click", async () => {
+  selectedKeys = getCheckedSubjectKeys();
   if (selectedKeys.size === 0) {
     setStatus(selectionStatus, "Select at least one available subject.", true);
     return;
@@ -314,6 +487,14 @@ saveButton.addEventListener("click", () => {
     return;
   }
   savedKeys = new Set(selectedKeys);
+  if (autoEnlistEnabled) {
+    try {
+      await autoEnlistIfReady();
+    } catch (error) {
+      setStatus(statusElement, error.message, true);
+    }
+    return;
+  }
   setStatus(selectionStatus, `${savedKeys.size} subject selection(s) saved.`);
   renderReview();
 });
@@ -333,12 +514,7 @@ document.getElementById("confirm-enlist").addEventListener("click", async (event
   button.disabled = true;
   setStatus(statusElement, "Submitting confirmed subjects to the portal...");
   try {
-    const response = await postJson("/api/enlist", {
-      keys: [...savedKeys],
-      confirmed: true,
-    });
-    renderResults(response.results);
-    setStatus(statusElement, "The portal response for each selected subject is shown below.");
+    await submitSavedSelections(false);
   } catch (error) {
     setStatus(statusElement, error.message, true);
   } finally {
@@ -353,7 +529,10 @@ document.getElementById("logout-button").addEventListener("click", async () => {
     subjectsByKey.clear();
     passwordInput.value = "";
     setPanels({ login: true, selection: false, review: false, results: false });
-    setStatus(statusElement, "Selenium session closed. Saved subject selections remain.");
+    setStatus(
+      statusElement,
+      "Local session cleared. The Selenium browser remains open. Saved subject selections remain.",
+    );
   } catch (error) {
     setStatus(statusElement, error.message, true);
   }

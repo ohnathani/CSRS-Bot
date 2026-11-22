@@ -1,19 +1,24 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import ctypes
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import secrets
 import subprocess
 import time
-from threading import Thread
+from threading import Barrier, Event, Lock, Thread
 from ctypes import wintypes
 
+from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 
 from csrs_selenium import (
     LoginError,
+    PortalAttemptCancelled,
+    PortalAttemptError,
     PortalSession,
     RegistrationPageError,
     run_selected_enlistments,
@@ -29,8 +34,127 @@ ROOT = Path(__file__).parent
 INDEX_PATH = ROOT / "index.html"
 SCRIPT_PATH = ROOT / "app.js"
 MAX_REQUEST_SIZE = 32768
+MAX_SELENIUM_INSTANCES = 50
 CSRF_TOKEN = secrets.token_urlsafe(32)
 _active_session: PortalSession | None = None
+
+
+def _close_portal_driver(driver: webdriver.Chrome | None) -> None:
+    if driver is None:
+        return
+    try:
+        driver.quit()
+    except WebDriverException as exc:
+        print(f"Could not close a losing Selenium browser: {exc}")
+
+
+def _start_first_successful_session(
+    username: str,
+    password: str,
+    instance_count: int,
+) -> PortalSession:
+    cancellation_events = [Event() for _ in range(instance_count)]
+    launch_barrier = Barrier(instance_count)
+    credentials_barrier = Barrier(instance_count)
+    failures: list[Exception] = []
+    selection_lock = Lock()
+    winning_index: int | None = None
+    winner_future: Future[PortalSession] | None = None
+    winner: PortalSession | None = None
+
+    def select_first_registration(index: int) -> None:
+        nonlocal winning_index
+        with selection_lock:
+            if winning_index is not None:
+                return
+            winning_index = index
+        for other_index, cancellation_event in enumerate(cancellation_events):
+            if other_index != index:
+                cancellation_event.set()
+
+    with ThreadPoolExecutor(max_workers=instance_count) as executor:
+        futures: dict[Future[PortalSession], tuple[int, Event]] = {}
+        for index, cancellation_event in enumerate(cancellation_events):
+            def start_instance(
+                attempt_index: int = index,
+                attempt_cancel_event: Event = cancellation_event,
+            ) -> PortalSession:
+                try:
+                    columns = math.ceil(math.sqrt(instance_count))
+                    return start_portal_session(
+                        username,
+                        password,
+                        attempt_cancel_event,
+                        lambda: select_first_registration(attempt_index),
+                        launch_barrier,
+                        credentials_barrier,
+                        _selenium_window_rect(attempt_index, instance_count),
+                        (attempt_index % columns, attempt_index // columns),
+                    )
+                except Exception:
+                    launch_barrier.abort()
+                    credentials_barrier.abort()
+                    raise
+
+            future = executor.submit(start_instance)
+            futures[future] = (index, cancellation_event)
+        try:
+            for future in as_completed(futures):
+                try:
+                    session = future.result()
+                except PortalAttemptCancelled:
+                    continue
+                except (LoginError, RegistrationPageError, WebDriverException) as exc:
+                    failures.append(exc)
+                else:
+                    index = futures[future][0]
+                    with selection_lock:
+                        selected_index = winning_index
+                    if selected_index is None:
+                        select_first_registration(index)
+                        selected_index = index
+                    if selected_index == index:
+                        winner_future = future
+                        winner = session
+                        break
+        finally:
+            for future, (index, cancellation_event) in futures.items():
+                if winner_future is None or index != winning_index:
+                    cancellation_event.set()
+
+    if winner is not None:
+        for future in futures:
+            if future is winner_future:
+                continue
+            try:
+                other_session = future.result()
+            except (
+                LoginError,
+                PortalAttemptCancelled,
+                PortalAttemptError,
+                RegistrationPageError,
+            ) as exc:
+                _close_portal_driver(exc.driver)
+            except WebDriverException:
+                continue
+            else:
+                _close_portal_driver(other_session.driver)
+        return winner
+
+    login_errors = [error for error in failures if isinstance(error, LoginError)]
+    if login_errors:
+        raise login_errors[0]
+    registration_errors = [
+        error for error in failures if isinstance(error, RegistrationPageError)
+    ]
+    if registration_errors:
+        raise registration_errors[0]
+    webdriver_errors = [
+        error for error in failures if isinstance(error, WebDriverException)
+    ]
+    if webdriver_errors:
+        raise webdriver_errors[0]
+    raise WebDriverException("No Selenium instance reached the Registration page.")
 
 
 class LocalAppHandler(BaseHTTPRequestHandler):
@@ -156,6 +280,7 @@ class LocalAppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/login":
             username = payload.get("username")
             password = payload.get("password")
+            instance_count = payload.get("instance_count", 1)
             if (
                 not isinstance(username, str)
                 or not username.strip()
@@ -164,15 +289,24 @@ class LocalAppHandler(BaseHTTPRequestHandler):
             ):
                 self._send_error_json(400, "Username and password are required.")
                 return
+            if (
+                not isinstance(instance_count, int)
+                or isinstance(instance_count, bool)
+                or not 1 <= instance_count <= MAX_SELENIUM_INSTANCES
+            ):
+                self._send_error_json(
+                    400,
+                    f"Choose between 1 and {MAX_SELENIUM_INSTANCES} Selenium instances.",
+                )
+                return
 
-            if _active_session is not None:
-                _active_session.close()
-                _active_session = None
+            _active_session = None
 
             try:
-                _active_session = start_portal_session(
+                _active_session = _start_first_successful_session(
                     username.strip(),
                     password,
+                    instance_count,
                 )
             except LoginError as exc:
                 self._send_error_json(401, str(exc))
@@ -206,10 +340,13 @@ class LocalAppHandler(BaseHTTPRequestHandler):
             ):
                 self._send_error_json(400, "Select at least one subject.")
                 return
-            if payload.get("confirmed") is not True:
+            if (
+                payload.get("confirmed") is not True
+                and payload.get("auto_enlist") is not True
+            ):
                 self._send_error_json(
                     400,
-                    "Review and confirm the selected subjects before enlistment.",
+                    "Review and confirm the selected subjects or enable auto-enlist.",
                 )
                 return
 
@@ -229,9 +366,7 @@ class LocalAppHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/logout":
-            if _active_session is not None:
-                _active_session.close()
-                _active_session = None
+            _active_session = None
             self._send_json(200, {"ok": True})
             return
 
@@ -272,6 +407,27 @@ def _local_app_window_rect() -> tuple[int, int, int, int]:
 
     half_width = screen_width // 2
     return half_width, 0, half_width, screen_height
+
+
+def _selenium_window_rect(index: int, instance_count: int) -> tuple[int, int, int, int]:
+    _, _, area_width, area_height = _local_app_window_rect()
+    columns = math.ceil(math.sqrt(instance_count))
+    rows = math.ceil(instance_count / columns)
+    column = index % columns
+    row = index // columns
+    x = column * (area_width // columns)
+    y = row * (area_height // rows)
+    width = (
+        area_width - x
+        if column == columns - 1
+        else area_width // columns
+    )
+    height = (
+        area_height - y
+        if row == rows - 1
+        else area_height // rows
+    )
+    return x, y, width, height
 
 
 def _open_local_app_browser() -> None:
@@ -435,7 +591,7 @@ def main() -> None:
     )
     print(f"Local subject-enlistment app: {SERVER_URL}")
     print("The local app is resized on the right; Selenium opens CSRS normally after login.")
-    print("Press Ctrl+C to stop the app and close the Selenium session.")
+    print("Press Ctrl+C to stop the app; Selenium windows will remain open.")
     browser_thread.start()
     try:
         server.serve_forever()
@@ -443,11 +599,7 @@ def main() -> None:
         pass
     finally:
         browser_thread.join()
-        try:
-            if _active_session is not None:
-                _active_session.close()
-        finally:
-            server.server_close()
+        server.server_close()
 
 
 if __name__ == "__main__":

@@ -107,6 +107,17 @@
       gap: 0;
     }
 
+    .auto-enlist-toggle {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .auto-enlist-toggle input {
+      margin-top: 4px;
+    }
+
     #login-heading {
       margin-bottom: 0;
     }
@@ -271,9 +282,18 @@
 <body>
   <main>
     <h1>CSRS Selenium Bot</h1>
-    <p>Log in to load current PE and NSTP registration subjects. Select and
-      review your choices before confirming enlistment.</p>
+    <p>Log in to load current PE and NSTP registration subjects. Review your
+      choices before manual enlistment, or enable auto-enlist to skip review.</p>
     <p id="app-status" class="status" role="status" aria-live="polite"></p>
+    <label class="auto-enlist-toggle" for="auto-enlist">
+      <input id="auto-enlist" name="auto-enlist" type="checkbox">
+      Auto-enlist selections without review or confirmation
+    </label>
+    <p class="note">When enabled before login, checked saved subjects are
+      submitted as soon as Registration loads. During a session, turning this
+      on submits all checked subjects; checking another subject while it is on
+      submits that subject immediately. This setting is saved in this browser
+      and is off by default.</p>
 
     <section id="login-panel" aria-labelledby="login-heading">
       <h2 id="login-heading">Log in to open Registration</h2>
@@ -289,6 +309,13 @@
             <input id="password" name="password" type="password" required
                    autocomplete="new-password">
           </div>
+          <div>
+            <label for="selenium-instance-count">Selenium instances (1–50)</label>
+            <input id="selenium-instance-count" name="instance-count"
+                   type="text" inputmode="numeric"
+                   pattern="[1-9]|[1-4][0-9]|50" value="2" required
+                   title="Enter a whole number from 1 to 50.">
+          </div>
         </div>
         <button id="login-button" class="login-submit" type="submit">
           Log in and load Registration
@@ -296,7 +323,12 @@
       </form>
       <p class="note">Credentials are sent to this computer's local app, then
         submitted by Selenium to the student portal. They are not saved to a file
-        or browser storage.</p>
+        or browser storage. All requested Selenium windows are tiled on the left
+        and reach the login form before credentials are entered. They then run
+        in parallel using the same credentials;
+        the first to load Registration stays open and the others close. If all
+        attempts fail, their windows remain open. If a new login form appears,
+        Selenium waits until its fields are ready before re-entering them.</p>
     </section>
 
     <section id="selection-panel" hidden aria-labelledby="subjects-heading">
