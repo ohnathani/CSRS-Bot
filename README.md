@@ -3,7 +3,7 @@
 - Loads current PE and NSTP subject tables from the authenticated Registration page.
 - Shows PE options and only available NSTP options.
 - Saves subject choices in the browser so they persist between app sessions.
-- Opens on the login page and keeps passwords out of browser storage and files.
+- Keeps login credentials in the form only while the app page is open; they are not saved to browser storage or files.
 - Keeps the first Selenium window to load Registration and closes the other attempts; if all fail, their windows remain open.
 - Retries transient login and Registration page loading every 5 seconds; stops if the portal explicitly rejects the credentials.
 - Lets you enter 1–50 parallel Selenium instances using the same login credentials.

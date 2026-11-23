@@ -494,7 +494,6 @@ loginForm.addEventListener("submit", async (event) => {
       password: passwordInput.value,
       instance_count: instanceCount,
     });
-    passwordInput.value = "";
     await renderTables(response.tables);
     if (autoEnlistAfterLogin && savedKeys.size === 0) {
       setStatus(
@@ -510,7 +509,6 @@ loginForm.addEventListener("submit", async (event) => {
       );
     }
   } catch (error) {
-    passwordInput.value = "";
     setStatus(statusElement, error.message, true);
   } finally {
     loginButton.disabled = false;
@@ -570,7 +568,6 @@ document.getElementById("logout-button").addEventListener("click", async () => {
     await postJson("/api/logout", {});
     tables = [];
     subjectsByKey.clear();
-    passwordInput.value = "";
     setPanels({ login: true, selection: false, review: false, results: false });
     setStatus(
       statusElement,
@@ -586,7 +583,6 @@ document.getElementById("close-session").addEventListener("click", async () => {
     await postJson("/api/logout", {});
     tables = [];
     subjectsByKey.clear();
-    passwordInput.value = "";
     setPanels({ login: true, selection: false, review: false, results: false });
     setStatus(statusElement, "Selenium session closed.");
   } catch (error) {

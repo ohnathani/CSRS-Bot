@@ -323,9 +323,11 @@
       </form>
       <p class="note">Credentials are sent to this computer's local app, then
         submitted by Selenium to the student portal. They are not saved to a file
-        or browser storage. All requested Selenium windows are tiled on the left
-        and reach the login form before credentials are entered. They then run
-        in parallel using the same credentials;
+        or browser storage. The login fields stay populated while this app page
+        is open, including after the Selenium session closes; reloading or
+        closing the app page clears them. All requested Selenium windows are
+        tiled on the left and reach the login form before credentials are
+        entered. They then run in parallel using the same credentials;
         the first to load Registration stays open and the others close. If all
         attempts fail, their windows remain open. If a new login form appears,
         Selenium waits until its fields are ready before re-entering them.</p>
